@@ -1,0 +1,102 @@
+# compose/guacamole/docker-compose.yml
+# Apache Guacamole — clientless remote desktop gateway (RDP / VNC / SSH in the browser)
+# Local browser:   http://localhost:18080   (only if the optional port below is uncommented)
+# Via Caddy:       https://myremote.mydomain.com
+# Default login:   guacadmin / guacadmin  — CHANGE THIS immediately after first login.
+# Start with: docker compose --env-file ../../.env_files/guacamole.env up -d
+#
+# Three components:
+#   - postgres : stores users, connections, history (schema auto-loaded on first boot)
+#   - guacd    : the proxy daemon that actually speaks RDP/VNC/SSH
+#   - guacamole: the Tomcat web app (UI + auth), served at the root path
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: guacamole-db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    environment:
+      POSTGRES_PASSWORD: ${PG_PASS:?database password required}
+      POSTGRES_USER: ${PG_USER:-guacamole}
+      POSTGRES_DB: ${PG_DB:-guacamole}
+    volumes:
+      # Persistent database storage
+      - ../../data/guacamole/postgres:/var/lib/postgresql/data
+      # Schema — only runs when the data dir is empty (i.e. on first boot).
+      # Generated via: docker run --rm guacamole/guacamole /opt/guacamole/bin/initdb.sh --postgresql
+      - ../../data/guacamole/init/initdb.sql:/docker-entrypoint-initdb.d/initdb.sql:ro
+    networks:
+      - guacamole_internal
+
+  guacd:
+    image: guacamole/guacd:latest
+    container_name: guacamole-guacd
+    restart: unless-stopped
+    volumes:
+      # Optional persistence for connection recordings / shared drive
+      - ../../data/guacamole/drive:/drive
+      - ../../data/guacamole/record:/record
+    extra_hosts:
+      # Lets connections target this host machine itself (e.g. SSH/RDP to host.docker.internal)
+      - "host.docker.internal:host-gateway"
+    networks:
+      - guacamole_internal
+
+  guacamole:
+    image: guacamole/guacamole:latest
+    container_name: guacamole-app
+    restart: unless-stopped
+    environment:
+      # Talk to the guacd daemon by service name
+      GUACD_HOSTNAME: guacd
+      GUACD_PORT: 4822
+      # Database backend
+      POSTGRESQL_HOSTNAME: postgres
+      POSTGRESQL_PORT: 5432
+      POSTGRESQL_DATABASE: ${PG_DB:-guacamole}
+      POSTGRESQL_USER: ${PG_USER:-guacamole}
+      POSTGRESQL_PASSWORD: ${PG_PASS}
+      # Serve the app at "/" instead of the default "/guacamole/"
+      WEBAPP_CONTEXT: ROOT
+      # --- Authentik SSO via OpenID Connect (values in ../../.env_files/guacamole.env) ---
+      # Presence of these auto-enables the bundled openid auth extension. The postgres
+      # extension stays active too, so guacadmin remains a local break-glass admin.
+      OPENID_AUTHORIZATION_ENDPOINT: ${OPENID_AUTHORIZATION_ENDPOINT}
+      OPENID_JWKS_ENDPOINT: ${OPENID_JWKS_ENDPOINT}
+      OPENID_ISSUER: ${OPENID_ISSUER}
+      OPENID_CLIENT_ID: ${OPENID_CLIENT_ID}
+      OPENID_REDIRECT_URI: ${OPENID_REDIRECT_URI}
+      OPENID_USERNAME_CLAIM_TYPE: ${OPENID_USERNAME_CLAIM_TYPE}
+      OPENID_SCOPE: ${OPENID_SCOPE}
+      # SSO-first: prioritize the openid extension over jdbc so the page redirects to Authentik
+      EXTENSION_PRIORITY: ${EXTENSION_PRIORITY}
+      # Trust Caddy's X-Forwarded-For so the brute-force tracker sees real client IPs
+      REMOTE_IP_VALVE_ENABLED: ${REMOTE_IP_VALVE_ENABLED}
+      # Relax the bundled brute-force ban (defaults self-lock on the benign OIDC nonce resubmit)
+      BAN_MAX_INVALID_ATTEMPTS: ${BAN_MAX_INVALID_ATTEMPTS}
+      BAN_ADDRESS_DURATION: ${BAN_ADDRESS_DURATION}
+    # ports:
+    #   # Uncomment for direct local access from this machine only (troubleshooting)
+    #   - "127.0.0.1:18080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      guacd:
+        condition: service_started
+    networks:
+      # Internal stack network AND the shared proxy network so Caddy can reach it
+      - guacamole_internal
+      - proxy_network
+
+networks:
+  guacamole_internal: # Internal network for this stack
+    driver: bridge
+    name: guacamole_internal_network
+  proxy_network: # External network shared with Caddy
+    external: true # Created and owned by compose/caddy/docker-compose.yml

@@ -1,0 +1,17 @@
+# Persistent data volumes — live state, never committed
+data/
+
+# Real secret env files — never committed
+.env_files/
+
+# Any stray real env files (the committed templates are .env.example / .env.sample)
+*.env
+!*.env.example
+!*.env.sample
+
+# Local tooling / editor / OS cruft
+.claude/
+.venv/
+venv/
+.DS_Store
+*.swp

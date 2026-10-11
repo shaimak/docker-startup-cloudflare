@@ -1,0 +1,55 @@
+# compose/vaultwarden/docker-compose.yml
+#
+# Vaultwarden — self-hosted Bitwarden-compatible password vault (Rust, SQLite).
+# Local URL:  http://localhost:18791
+# Caddy URL:  https://mypass.mydomain.com   (NO Authentik forward-auth — see below)
+# Start:      docker compose -f compose/vaultwarden/docker-compose.yml \
+#               --env-file .env_files/vaultwarden.env up -d
+#
+# Why no Authentik forward-auth, unlike the other protected services:
+#   The Bitwarden browser extension and the mobile apps call /api and /identity
+#   directly. They cannot follow an interactive OIDC redirect, so forward-auth
+#   gives you a working web vault and broken clients. Vaultwarden uses its own
+#   auth instead: signups disabled, /admin gated by ADMIN_TOKEN.
+#
+# One container, no database service — Vaultwarden keeps everything in SQLite
+# under data/vaultwarden, so there is no <service>_internal_network here.
+
+services:
+  vaultwarden:
+    image: docker.io/vaultwarden/server:1.37.1-alpine
+    container_name: vaultwarden-app
+    restart: unless-stopped
+    environment:
+      # Exact public URL, including https://. Attachment links, WebAuthn
+      # origins and the notifications websocket are all derived from it.
+      DOMAIN: ${DOMAIN:?err}
+      # Locked down: nobody can self-register or be invited into a vault.
+      SIGNUPS_ALLOWED: ${SIGNUPS_ALLOWED:-false}
+      INVITATIONS_ALLOWED: ${INVITATIONS_ALLOWED:-false}
+      # /admin panel token. openssl rand -base64 48
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?err}
+      # Caddy sets X-Forwarded-For, not X-Real-IP (Vaultwarden's default), so
+      # without this every client looks like the Docker gateway to the logs and
+      # to the login rate limiter.
+      IP_HEADER: ${IP_HEADER:-X-Forwarded-For}
+      # Bitwarden's push relay needs credentials from bitwarden.com/host.
+      PUSH_ENABLED: ${PUSH_ENABLED:-false}
+      # Small host, many containers — keep the worker pool modest.
+      ROCKET_WORKERS: ${ROCKET_WORKERS:-2}
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
+    volumes:
+      # SQLite db, rsa_key.pem, attachments, sends, icon_cache.
+      # rsa_key.pem MUST survive any move — see README.
+      - ../../data/vaultwarden:/data
+    ports:
+      # Bound to loopback: direct access from this machine only, public traffic
+      # arrives through Caddy over HTTPS.
+      - "127.0.0.1:18791:80"
+    networks:
+      # Shared proxy network so Caddy can reach this container by name
+      - proxy_network
+
+networks:
+  proxy_network:
+    external: true # Created and owned by compose/caddy/docker-compose.yml

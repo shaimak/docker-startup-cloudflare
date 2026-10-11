@@ -1,0 +1,103 @@
+# compose/caddy/Caddyfile
+# Caddy reverse proxy config. One site block per public hostname.
+# Replace the example domains below with your own.
+#
+# This is the Cloudflare Tunnel variant: Caddy never faces the internet
+# directly. cloudflared connects to it over HTTPS on the internal network, and
+# Cloudflare terminates the public TLS at its edge. See compose/cloudflared.
+#
+# After ANY edit to this file you MUST force-recreate Caddy (a plain reload
+# misses single-file bind-mount changes):
+#   docker compose -f compose/caddy/docker-compose.yml up -d --force-recreate caddy
+
+{
+    # Behind a Cloudflare Tunnel there is no inbound :443 for Let's Encrypt to
+    # reach, so Caddy issues certificates from its own internal CA instead.
+    # cloudflared is told not to verify them ("No TLS Verify") and to send the
+    # real request hostname as SNI ("Match SNI to Host") so Caddy can match the
+    # right site. See compose/cloudflared/README.md.
+    local_certs
+
+    # cloudflared is now the only thing that talks to Caddy. Trust it so Caddy
+    # keeps the real client IP and original scheme from X-Forwarded-For /
+    # X-Forwarded-Proto instead of seeing the tunnel's internal address.
+    servers {
+        trusted_proxies static private_ranges
+    }
+}
+
+# --- Authentik (SSO / identity provider) ---
+mysso.mydomain.com {
+    encode zstd gzip
+    reverse_proxy authentik-server:9000
+}
+
+# --- Outline (wiki) ---
+mywiki.mydomain.com {
+    encode zstd gzip
+    reverse_proxy outline-app:3000
+}
+
+# --- Vaultwarden (password vault) ---
+# Plain reverse_proxy on purpose. Do NOT wrap this one in the forward-auth
+# template below: the Bitwarden browser extension and mobile apps call /api and
+# /identity directly and cannot follow an interactive OIDC login redirect, so
+# forward-auth leaves you with a working web vault and broken clients.
+# See compose/vaultwarden/README.md.
+mypass.mydomain.com {
+    encode zstd gzip
+    reverse_proxy vaultwarden-app:80
+}
+
+# --- Guacamole (remote desktop in the browser) ---
+myremote.mydomain.com {
+    encode zstd gzip
+    reverse_proxy guacamole-app:8080
+}
+
+# --- Hermes Agent (AI assistant dashboard) ---
+# Plain reverse_proxy on purpose: the Hermes dashboard has its own login
+# (Basic Auth, required because it binds 0.0.0.0), so it does not need the
+# Authentik forward-auth wrapper. reverse_proxy passes WebSocket upgrades
+# through automatically. See compose/hermes/README.md.
+myhermes.mydomain.com {
+    encode zstd gzip
+    reverse_proxy hermes-dashboard:9119
+}
+
+# --- Guacamole anonymous front-end (optional) ---
+# Same app as myremote.mydomain.com, reached via a neutral domain so the URL you
+# share has no descriptive name in it. This is front-end only; auth still runs
+# through Authentik. A second domain needs its own Cloudflare zone and its own
+# wildcard tunnel hostname pointing back to this Caddy. See
+# compose/cloudflared/README.md.
+myotherdomain.com {
+    encode zstd gzip
+    reverse_proxy guacamole-app:8080
+}
+
+# --- Template: an app protected by Authentik forward-auth ---
+# Copy this block for any upstream you want to sit behind SSO. Caddy asks
+# Authentik whether the request is authenticated before it reaches the app; an
+# unauthenticated request is redirected to the Authentik login page.
+#
+# Requires a Proxy Provider (mode: forward_single, external host = this URL) +
+# Application in Authentik, attached to the embedded outpost.
+#
+# myapp.mydomain.com {
+#     encode zstd gzip
+#     route {
+#         # Authentik embedded outpost endpoints (login redirect, callback)
+#         reverse_proxy /outpost.goauthentik.io/* authentik-server:9000
+#         # Ask Authentik if the request is authenticated; 401 -> login redirect
+#         forward_auth authentik-server:9000 {
+#             uri /outpost.goauthentik.io/auth/caddy
+#             copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Email X-Authentik-Name X-Authentik-Uid X-Authentik-Jwt X-Authentik-Meta-Jwks X-Authentik-Meta-Outpost X-Authentik-Meta-Provider X-Authentik-Meta-App X-Authentik-Meta-Version
+#         }
+#         # Authenticated requests reach the app (WebSocket upgrades pass through)
+#         reverse_proxy my-app:8080
+#     }
+# }
+#
+# NOTE: do NOT add `trust_forward_header` inside forward_auth. It is not a valid
+# Caddy subdirective and will crash the whole Caddyfile (takes every site down).

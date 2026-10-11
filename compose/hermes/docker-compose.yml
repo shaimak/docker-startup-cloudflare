@@ -1,0 +1,62 @@
+# compose/hermes/docker-compose.yml
+#
+# Hermes Agent — Nous Research's self-improving agent, with a web dashboard.
+# Works with any OpenAI-compatible LLM endpoint; this setup uses free Groq +
+# Gemini keys (bring your own).
+# Local URL:  http://localhost:9119   (dashboard, loopback-only direct access)
+# Caddy URL:  https://myhermes.mydomain.com
+# Start:      docker compose -f compose/hermes/docker-compose.yml \
+#               --env-file .env_files/hermes.env up -d
+#
+# Two services off the prebuilt image, sharing one data volume (/opt/data holds
+# config.yaml, memory, skills, sessions):
+#   gateway   — the always-on agent runtime. Messaging platforms (Telegram,
+#               Discord, ...) are off until you configure them; see the docs.
+#   dashboard — the web UI on port 9119. It binds 0.0.0.0 so Caddy can reach it
+#               by name, which means it FAILS CLOSED unless an auth provider is
+#               configured — here, Basic Auth (username + password) via the
+#               HERMES_DASHBOARD_BASIC_AUTH_* env vars. See README.md.
+#
+# HERMES_UID/GID remap the in-container user to the host user that owns
+# data/hermes, so files created inside the container stay yours.
+
+services:
+  gateway:
+    image: docker.io/nousresearch/hermes-agent:latest
+    container_name: hermes
+    restart: unless-stopped
+    env_file:
+      # Provider keys + dashboard auth. Never commit the real file.
+      - ../../.env_files/hermes.env
+    environment:
+      - HERMES_UID=${HERMES_UID:-1000}
+      - HERMES_GID=${HERMES_GID:-1000}
+    volumes:
+      - ../../data/hermes/data:/opt/data
+    command: ["gateway", "run"]
+    networks:
+      - hermes_internal_network
+
+  dashboard:
+    image: docker.io/nousresearch/hermes-agent:latest
+    container_name: hermes-dashboard
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    env_file:
+      - ../../.env_files/hermes.env
+    environment:
+      - HERMES_UID=${HERMES_UID:-1000}
+      - HERMES_GID=${HERMES_GID:-1000}
+    volumes:
+      - ../../data/hermes/data:/opt/data
+    command: ["dashboard", "--host", "0.0.0.0", "--no-open"]
+    networks:
+      - proxy_network            # so Caddy can reach hermes-dashboard:9119
+      - hermes_internal_network
+
+networks:
+  proxy_network:
+    external: true # Created and owned by compose/caddy/docker-compose.yml
+  hermes_internal_network:
+    driver: bridge

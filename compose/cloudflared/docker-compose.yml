@@ -1,0 +1,31 @@
+# compose/cloudflared/docker-compose.yml
+# Cloudflare Tunnel connector.
+#
+# Makes an OUTBOUND connection to Cloudflare's edge, so the stack is reachable
+# from the internet with NO public IP and NO port forwarding. This is what makes
+# the stack work behind CGNAT or a dynamic IP, where port forwarding is
+# impossible.
+#
+# It routes the tunnel to Caddy, which keeps doing all per-hostname routing.
+# The public hostname is configured in the Cloudflare Zero Trust dashboard:
+#   *.yourdomain.com  ->  https://caddy:443
+#   TLS: No TLS Verify = ON, Match SNI to Host = ON
+# See README.md in this folder for the full walkthrough.
+#
+# Start:
+#   docker compose --env-file ../../.env_files/cloudflared.env up -d
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      # Must share proxy_network so it can reach the caddy container by name.
+      - proxy_network
+
+networks:
+  proxy_network:
+    external: true
+    name: proxy_network

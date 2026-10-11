@@ -1,0 +1,35 @@
+# compose/caddy/docker-compose.yml
+# Defines the Caddy v2 reverse proxy service.
+# This file CREATES and manages the shared proxy_network.
+
+# version: "3.8" # Optional
+
+# Define the network that Caddy will manage
+networks:
+  proxy_network:
+    driver: bridge # Use the standard bridge driver
+    name: proxy_network # Explicitly name the network (good practice)
+
+services:
+  caddy: #service name
+    image: caddy:latest # Use the official Caddy image
+    container_name: caddy_reverse_proxy # Specific container name
+    restart: unless-stopped # Keep Caddy running
+    # No host ports are published on purpose. With a Cloudflare Tunnel, nothing
+    # connects to this box from the internet directly — cloudflared reaches Caddy
+    # over the internal proxy_network (caddy:443). If you ever switch to
+    # port-forwarding instead, add back:
+    #   ports:
+    #     - "80:80"
+    #     - "443:443"
+    #     - "443:443/udp"
+    volumes:
+      # Mount the Caddyfile configuration from the host
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      # Mount persistent storage for Caddy's automatically managed certificates and state
+      - ../../data/caddy/data:/data
+      # Mount persistent storage for Caddy's configuration assets
+      - ../../data/caddy/config:/config
+    networks:
+      # Connect Caddy container to the shared proxy network it manages
+      - proxy_network

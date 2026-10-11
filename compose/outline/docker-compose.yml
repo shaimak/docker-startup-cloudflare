@@ -1,0 +1,95 @@
+# compose/outline/docker-compose.yml
+# Adapted for docker-startup-kit structure and Authentik OIDC
+
+#version: "3.8"
+
+services:
+  postgres:
+    image: docker.io/library/postgres:16-alpine # Using a slightly newer Postgres
+    container_name: outline-db
+    restart: unless-stopped
+    volumes:
+      # Map to host data directory
+      - ../../data/outline/database:/var/lib/postgresql/data
+    environment:
+      # Use Outline specific user/db/pass from .env file
+      POSTGRES_USER: ${OUTLINE_DB_USER:-outline}
+      POSTGRES_PASSWORD: ${OUTLINE_DB_PASS:?database password required}
+      POSTGRES_DB: ${OUTLINE_DB_NAME:-outline}
+    networks:
+      - outline_internal
+
+  redis:
+    image: docker.io/library/redis:alpine
+    container_name: outline-redis
+    restart: unless-stopped
+    volumes:
+      # Map to host data directory
+      - ../../data/outline/redis:/data
+    # Using default redis config is usually fine
+    networks:
+      - outline_internal
+
+  outline:
+    image: docker.io/outlinewiki/outline:1.9.2 #latest when last checked
+    container_name: outline-app
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      # Map Outline's primary storage
+      - ../../data/outline/storage:/var/lib/outline/data
+    environment:
+      # --- Core Outline Settings ---
+      URL: ${OUTLINE_URL:?err} # Must be set to external URL (https://mywiki.mydomain.com)
+      PORT: "3000"            # Internal port Outline listens on
+      SECRET_KEY: ${OUTLINE_SECRET_KEY:?err} # Require Outline specific secret
+      UTILS_SECRET: ${OUTLINE_UTILS_SECRET:?err} # Require Outline specific utils secret
+      NODE_ENV: production
+      PGSSLMODE: disable      # As per ref-sr
+
+      # --- Database Connection ---
+      DATABASE_URL: postgresql://${OUTLINE_DB_USER:-outline}:${OUTLINE_DB_PASS:?err}@postgres:5432/${OUTLINE_DB_NAME:-outline} # Use service name 'postgres'
+
+      # --- Redis Connection ---
+      REDIS_URL: redis://redis:6379 # Use service name 'redis'
+
+      # --- File Storage (Using local) ---
+      FILE_STORAGE: local
+      FILE_STORAGE_LOCAL_ROOT_DIR: /var/lib/outline/data # Internal path
+      FILE_STORAGE_UPLOAD_MAX_SIZE: "262144000" # ~250MB
+
+      # --- OIDC Configuration (Point to Authentik) ---
+      # These values MUST match the Provider/Application you create in Authentik
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?err} # Get from Authentik
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?err} # Get from Authentik
+      OIDC_AUTH_URI: ${OIDC_AUTH_URI:?err} # Authentik's Authorization URL
+      OIDC_TOKEN_URI: ${OIDC_TOKEN_URI:?err} # Authentik's Token URL
+      OIDC_USERINFO_URI: ${OIDC_USERINFO_URI:?err} # Authentik's User Info URL
+      OIDC_DISPLAY_NAME: ${OIDC_DISPLAY_NAME:-Authentik Login} # Text for the login button
+
+      # --- Other Settings (from ref-sr or simply good practice) ---
+      FORCE_HTTPS: "true" # Important when behind a reverse proxy handling HTTPS
+      WEB_CONCURRENCY: "1"
+      LOG_LEVEL: info
+      DEFAULT_LANGUAGE: en_US
+      # RATE_LIMITER_* settings from ref-sr
+      RATE_LIMITER_ENABLED: "true"
+      RATE_LIMITER_REQUESTS: "1000"
+      RATE_LIMITER_DURATION_WINDOW: "60"
+
+      # Optional but recommended: Set user/group for file permissions if needed
+      # USERMAP_UID: ${USERMAP_UID:-1000}
+      # USERMAP_GID: ${USERMAP_GID:-1000}
+
+    networks: # Connect to internal network AND the external proxy network
+      - outline_internal
+      - proxy_network
+
+networks:
+  outline_internal: # Internal network for this stack
+    driver: bridge
+    name: outline_internal_network
+  proxy_network: # External network shared with Caddy
+    external: true # Managed outside this compose file

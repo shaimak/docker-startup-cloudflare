@@ -1,0 +1,20 @@
+# compose/vnstat/docker-compose.yml
+#
+# Network bandwidth accounting for the host WAN interface (enp1s0).
+# Local URL:  n/a (CLI only — `docker exec vnstat vnstat`)
+# Caddy URL:  n/a (not exposed publicly)
+# Start:      docker compose -f compose/vnstat/docker-compose.yml up -d
+#
+# Uses host networking so it can read the real host interface counters
+# (/proc/net/dev). DB persists to data/vnstat across restarts/reboots.
+
+services:
+  vnstat:
+    image: vergoh/vnstat:latest
+    container_name: vnstat
+    restart: unless-stopped
+    network_mode: host          # required to see host interfaces (enp1s0)
+    environment:
+      TZ: ${VNSTAT_TZ:-Etc/UTC}
+    volumes:
+      - ../../data/vnstat:/var/lib/vnstat
